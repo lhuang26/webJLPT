@@ -23,6 +23,8 @@ interface VocabularyEntry {
   pastNegative: string
 }
 
+const entriesByCategory = new Map<number, VocabularyEntry[]>()
+
 interface EntryForm {
   entry: string
   meaning: string
@@ -202,13 +204,22 @@ function ReviewPage({
   useEffect(() => {
     if (!categoryId) return
 
+    const categoryNumber = Number(categoryId)
+    const cachedEntries = entriesByCategory.get(categoryNumber)
     let active = true
 
-    apiRequest<VocabularyEntry[]>(
-      `/api/categories/${encodeURIComponent(categoryId)}/entries`,
-    )
+    const entriesRequest = cachedEntries
+      ? Promise.resolve(cachedEntries)
+      : apiRequest<VocabularyEntry[]>(
+          `/api/categories/${encodeURIComponent(categoryId)}/entries`,
+        )
+
+    entriesRequest
       .then((loadedEntries) => {
         if (!active) return
+        if (!cachedEntries) {
+          entriesByCategory.set(categoryNumber, loadedEntries)
+        }
         setEntries(loadedEntries)
         setEntryIndex(0)
         setLoadedCategoryId(categoryId)
@@ -242,6 +253,7 @@ function ReviewPage({
   async function orderCurrentEntry(orderType: 1 | -1) {
     if (!currentEntry) return
 
+    const orderedCategoryId = categoryId
     setSavingOrder(true)
     setRevealedEntryId(null)
 
@@ -250,14 +262,19 @@ function ReviewPage({
         method: 'POST',
         body: JSON.stringify({ orderType }),
       })
-      const updatedEntries = await apiRequest<VocabularyEntry[]>(
-        `/api/categories/${encodeURIComponent(categoryId)}/entries`,
-      )
+      for (const [cachedCategoryId, cachedEntries] of entriesByCategory) {
+        entriesByCategory.set(
+          cachedCategoryId,
+          cachedEntries.filter((entry) => entry.id !== currentEntry.id),
+        )
+      }
+
+      const updatedEntries = entriesByCategory.get(Number(orderedCategoryId)) ?? []
       const previousIndex = updatedEntries.findIndex(
         (entry) => entry.id === currentEntry.id,
       )
       setEntries(updatedEntries)
-      setLoadedCategoryId(categoryId)
+      setLoadedCategoryId(orderedCategoryId)
       setEntryIndex(
         updatedEntries.length === 0
           ? 0
@@ -291,7 +308,7 @@ function ReviewPage({
         <select
           value={categoryId}
           onChange={(event) => setCategoryId(event.target.value)}
-          disabled={categoriesLoading || categories.length === 0}
+          disabled={categoriesLoading || categories.length === 0 || savingOrder}
         >
           <option value="">
             {categoriesLoading ? 'Loading categories…' : 'Choose a category'}
@@ -415,6 +432,9 @@ function DataEntryPage({
         method: 'POST',
         body: JSON.stringify({ ...form, categoryIds }),
       })
+      for (const categoryId of categoryIds) {
+        entriesByCategory.delete(categoryId)
+      }
       setForm(emptyForm)
       setCategoryIds([])
       setSuccess('Vocabulary entry saved.')
