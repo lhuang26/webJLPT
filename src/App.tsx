@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import './App.css'
 
 const API_BASE_URL =
@@ -21,6 +21,11 @@ interface VocabularyEntry {
   negative: string
   pastPositive: string
   pastNegative: string
+}
+
+interface WordLookupResponse {
+  entry: VocabularyEntry | null
+  categories: { catId: number; catVal: boolean }[]
 }
 
 const entriesByCategory = new Map<number, VocabularyEntry[]>()
@@ -404,12 +409,62 @@ function DataEntryPage({
   const [form, setForm] = useState<EntryForm>(emptyForm)
   const [categoryIds, setCategoryIds] = useState<number[]>([])
   const [saving, setSaving] = useState(false)
+  const [lookingUpWord, setLookingUpWord] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const wordLookupRequest = useRef(0)
 
   function updateField(key: keyof EntryForm, value: string) {
+    if (key === 'entry') {
+      wordLookupRequest.current += 1
+      setLookingUpWord(false)
+    }
     setForm((currentForm) => ({ ...currentForm, [key]: value }))
     setSuccess('')
+  }
+
+  async function lookupWord(entry: string) {
+    if (!entry.trim()) return
+
+    const requestId = ++wordLookupRequest.current
+    setLookingUpWord(true)
+    setError('')
+
+    try {
+      const lookup = await apiRequest<WordLookupResponse>(
+        `/api/entries/lookup?entry=${encodeURIComponent(entry)}`,
+      )
+      if (requestId !== wordLookupRequest.current) return
+
+      const word = lookup.entry
+      setForm((currentForm) => ({
+        ...currentForm,
+        entry: word?.entry ?? entry,
+        meaning: word?.meaning ?? '',
+        hiragana: word?.hiragana ?? '',
+        katakana: word?.katakana ?? '',
+        positive: word?.positive ?? '',
+        negative: word?.negative ?? '',
+        pastPositive: word?.pastPositive ?? '',
+        pastNegative: word?.pastNegative ?? '',
+      }))
+      setCategoryIds(
+        lookup.categories
+          .filter((category) => category.catVal)
+          .map((category) => category.catId),
+      )
+    } catch (lookupError) {
+      if (requestId !== wordLookupRequest.current) return
+      setError(
+        lookupError instanceof Error
+          ? lookupError.message
+          : 'Could not look up this vocabulary entry.',
+      )
+    } finally {
+      if (requestId === wordLookupRequest.current) {
+        setLookingUpWord(false)
+      }
+    }
   }
 
   function toggleCategory(id: number) {
@@ -493,6 +548,11 @@ function DataEntryPage({
                 value={form[field.key]}
                 maxLength={field.maxLength}
                 onChange={(event) => updateField(field.key, event.target.value)}
+                onBlur={
+                  field.key === 'entry'
+                    ? (event) => void lookupWord(event.currentTarget.value)
+                    : undefined
+                }
                 lang={field.key === 'hiragana' || field.key === 'katakana' ? 'ja' : undefined}
                 autoComplete="off"
               />
@@ -503,9 +563,9 @@ function DataEntryPage({
         <button
           type="submit"
           className="button button-primary submit-button"
-          disabled={saving || categoriesLoading}
+          disabled={saving || lookingUpWord || categoriesLoading}
         >
-          {saving ? 'Saving…' : 'Save vocabulary'}
+          {lookingUpWord ? 'Looking up…' : saving ? 'Saving…' : 'Save vocabulary'}
         </button>
       </form>
     </section>
